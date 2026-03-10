@@ -33,11 +33,13 @@ jobs:
         
     - name: Setup JFrog CLI
       uses: jfrog/setup-jfrog-cli@v4
+      with:
+        # This MUST match the 'Provider Name' you created in JFrog UI
+        oidc-provider-name: github-oidc
       env:
-        JF_URL: ${{ env.JF_URL }}
-        JF_ACCESS_TOKEN: ${{ env.JF_ACCESS_TOKEN }}
+        JF_URL: ${{ secrets.JF_URL }}
+        # Notice: JF_ACCESS_TOKEN is GONE. The action handles it automatically via OIDC.
         JF_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Install & Audit Dependencies
       run: |
         # 1. Collect Environment & Git Info

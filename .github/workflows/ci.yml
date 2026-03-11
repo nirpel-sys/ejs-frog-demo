@@ -32,12 +32,24 @@ jobs:
             
     - name: Setup JFrog CLI
       uses: jfrog/setup-jfrog-cli@v4
-      id: setup-cli
+      id: setup-cli # Added ID for referencing
       with:
-        oidc-provider-name: github-oidc  # 👈 Matches Provider Name in JFrog UI
+        oidc-provider-name: github-oidc
       env:
-        JF_URL: ${{ env.JF_URL }}
+        JF_URL: ${{ secrets.JF_URL }}
         JF_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Auth Debug & Diagnostics
+      run: |
+        echo "--- CLI Config Check ---"
+        jf c show || echo "No server configured yet."
+        
+        echo "--- Testing Connection ---"
+        # This will reveal the REAL error (401, 403, etc.)
+        jf rt ping || echo "Ping failed - Authentication is not working."
+        
+        # Manually try to use the server if it exists
+        jf c use setup-jfrog-cli-server || exit 1
 
     - name: Install & Audit Dependencies
       run: |

@@ -41,11 +41,19 @@ jobs:
         JF_URL: ${{ secrets.JF_URL }}
         # Notice: JF_ACCESS_TOKEN is GONE. The action handles it automatically via OIDC.
         JF_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
     - name: Install & Audit Dependencies
       run: |
+        # Check if we are actually logged in
+        jf c show 
+
+        # Explicitly set the server created by the setup-jfrog-cli action
+        # If OIDC succeeded, this server name is standard
+        jf c use setup-jfrog-cli-server || echo "Auth failed, no server found"
+
         # 1. Collect Environment & Git Info
-        jf rt bce ${{ env.BUILD_NAME }} ${{ github.run_number }} 
-        jf rt bag ${{ env.BUILD_NAME }} ${{ github.run_number }} 
+        jf rt bce ${{ env.BUILD_NAME }} ${{ github.run_number }}
+        jf rt bag ${{ env.BUILD_NAME }} ${{ github.run_number }}
         
         # 2. Configure Artifactory Resolution
         jf npmc --repo-resolve demo-dev-npm

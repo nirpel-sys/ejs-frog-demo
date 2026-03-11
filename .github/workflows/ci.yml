@@ -1,5 +1,4 @@
 name: CI Pipeline
-
 on:
   push:
     branches: [main]
@@ -10,16 +9,15 @@ permissions:
   contents: write
   pull-requests: write
   security-events: write
-  id-token: write
+  id-token: write  # 👈 REQUIRED for OIDC Handshake
 
 env:
-  JF_URL: ${{ secrets.JF_URL }}
-  JF_ACCESS_TOKEN: ${{ secrets.JF_ACCESS_TOKEN }}
+  # Using vars (Variables) is better for OIDC, but secrets works too
+  JF_URL: ${{ secrets.JF_URL }} 
   IMAGE_NAME: ejs-frog-demo
   BUILD_NAME: ejs-demo
 
 jobs:
-
   build-and-publish:
     name: Build, Scan & Publish
     runs-on: ubuntu-latest
@@ -31,29 +29,25 @@ jobs:
       uses: actions/setup-node@v3
       with:
         node-version: '18'
-        
+            
     - name: Setup JFrog CLI
       uses: jfrog/setup-jfrog-cli@v4
+      id: setup-cli
       with:
-        # This MUST match the 'Provider Name' you created in JFrog UI
-        oidc-provider-name: github-oidc
+        oidc-provider-name: github-oidc  # 👈 Matches Provider Name in JFrog UI
       env:
-        JF_URL: ${{ secrets.JF_URL }}
-        # Notice: JF_ACCESS_TOKEN is GONE. The action handles it automatically via OIDC.
+        JF_URL: ${{ env.JF_URL }}
         JF_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        
+
     - name: Install & Audit Dependencies
       run: |
-        # Check if we are actually logged in
-        jf c show 
-
-        # Explicitly set the server created by the setup-jfrog-cli action
-        # If OIDC succeeded, this server name is standard
-        jf c use setup-jfrog-cli-server || echo "Auth failed, no server found"
+        # 0. Ensure we are using the OIDC-authenticated server
+        # The setup action creates a server named 'setup-jfrog-cli-server'
+        jf c use setup-jfrog-cli-server
 
         # 1. Collect Environment & Git Info
-        jf rt bce ${{ env.BUILD_NAME }} ${{ github.run_number }}
-        jf rt bag ${{ env.BUILD_NAME }} ${{ github.run_number }}
+        jf rt bce ${{ env.BUILD_NAME }} ${{ github.run_number }} 
+        jf rt bag ${{ env.BUILD_NAME }} ${{ github.run_number }} 
         
         # 2. Configure Artifactory Resolution
         jf npmc --repo-resolve demo-dev-npm
@@ -66,7 +60,6 @@ jobs:
         rm package-lock.json || true
         jf npm i --omit dev --build-name=${{ env.BUILD_NAME }} --build-number=${{ github.run_number }}
 
-
     - name: Build Docker Image
       run: |
         IMAGE_TAG=${{ github.run_number }}
@@ -75,13 +68,14 @@ jobs:
         echo "Building image: $FULL_IMAGE:$IMAGE_TAG"
         # We pass INJECTED_SECRET from GitHub Secrets to test secret detection in binary
         jf docker build -t $FULL_IMAGE:$IMAGE_TAG --build-arg INJECTED_SECRET=${{ secrets.FAKE_SECRET }} .
-        
+
     - name: Local Xray Docker Scan
       run: |
         IMAGE_TAG=${{ github.run_number }}
         FULL_IMAGE="${{ vars.DOCKER_REPO }}/${{ env.IMAGE_NAME }}"
         
         echo "🛡️ Scanning Docker image locally..."
+        # Note: server-id is handled by the CLI 'use' command earlier
         jf docker scan $FULL_IMAGE:$IMAGE_TAG --watches="docker-security-watch" --fail=false
 
     - name: Push Docker Image
@@ -95,5 +89,4 @@ jobs:
     - name: Publish Build Info
       run: |
         echo "Publishing build info..."
-        # Note: 'jf rt bp' publishes the collected info from all previous steps (bce, bag, npm i, docker push)
         jf rt bp ${{ env.BUILD_NAME }} ${{ github.run_number }}

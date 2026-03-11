@@ -10,6 +10,7 @@ permissions:
   contents: write
   pull-requests: write
   security-events: write
+  id-token: write
 
 env:
   JF_URL: ${{ secrets.JF_URL }}

@@ -2,18 +2,16 @@ name: CI Pipeline
 on:
   push:
     branches: [main]
-    tags: ['v*']
-  workflow_dispatch:  # Manual trigger for testing
+  workflow_dispatch: 
 
 permissions:
   contents: write
   pull-requests: write
   security-events: write
-  id-token: write  # 👈 REQUIRED for OIDC Handshake
+  id-token: write  # Required for OIDC handshake
 
 env:
-  # Using vars (Variables) is better for OIDC, but secrets works too
-  JF_URL: ${{ secrets.JF_URL }} 
+  JF_URL: ${{ vars.JF_URL }}
   IMAGE_NAME: ejs-frog-demo
   BUILD_NAME: ejs-demo
 
@@ -22,83 +20,59 @@ jobs:
     name: Build, Scan & Publish
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
-            
-    - name: Setup JFrog CLI
-      uses: jfrog/setup-jfrog-cli@v4
-      id: setup-cli # Added ID for referencing
-      with:
-        oidc-provider-name: github-oidc
-      env:
-        JF_URL: ${{ secrets.JF_URL }}
-        JF_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
 
-    - name: Auth Debug & Diagnostics
-      run: |
-        echo "--- CLI Config Check ---"
-        jf c show || echo "No server configured yet."
-        
-        echo "--- Testing Connection ---"
-        # This will reveal the REAL error (401, 403, etc.)
-        jf rt ping || echo "Ping failed - Authentication is not working."
-        
-        # Manually try to use the server if it exists
-        jf c use setup-jfrog-cli-server || exit 1
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+        with:
+          oidc-provider-name: github-oidc
+        env:
+          JF_URL: ${{ env.JF_URL }}
+          JF_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Install & Audit Dependencies
-      run: |
-        # 0. Ensure we are using the OIDC-authenticated server
-        # The setup action creates a server named 'setup-jfrog-cli-server'
-        jf c use setup-jfrog-cli-server
+      - name: Install & Audit Dependencies
+        run: |
+          # 1. Initialize Build Info
+          jf rt bce ${{ env.BUILD_NAME }} ${{ github.run_number }}
+          jf rt bag ${{ env.BUILD_NAME }} ${{ github.run_number }}
+          
+          # 2. Configure & Audit
+          jf npmc --repo-resolve demo-dev-npm
+          jf ca
+          
+          # 3. Clean Install
+          jf npm cache clean --force
+          rm package-lock.json || true
+          jf npm i --omit dev --build-name=${{ env.BUILD_NAME }} --build-number=${{ github.run_number }}
 
-        # 1. Collect Environment & Git Info
-        jf rt bce ${{ env.BUILD_NAME }} ${{ github.run_number }} 
-        jf rt bag ${{ env.BUILD_NAME }} ${{ github.run_number }} 
-        
-        # 2. Configure Artifactory Resolution
-        jf npmc --repo-resolve demo-dev-npm
-        
-        # 3. Curation Audit
-        jf ca
-        
-        # 4. Clean Install (Recorded in Build Info)
-        jf npm cache clean --force
-        rm package-lock.json || true
-        jf npm i --omit dev --build-name=${{ env.BUILD_NAME }} --build-number=${{ github.run_number }}
+      - name: Build Docker Image
+        run: |
+          IMAGE_TAG=${{ github.run_number }}
+          FULL_IMAGE="${{ vars.DOCKER_REPO }}/${{ env.IMAGE_NAME }}"
+          
+          jf docker build -t $FULL_IMAGE:$IMAGE_TAG \
+            --build-arg INJECTED_SECRET=${{ secrets.FAKE_SECRET }} .
 
-    - name: Build Docker Image
-      run: |
-        IMAGE_TAG=${{ github.run_number }}
-        FULL_IMAGE="${{ vars.DOCKER_REPO }}/${{ env.IMAGE_NAME }}"
-        
-        echo "Building image: $FULL_IMAGE:$IMAGE_TAG"
-        # We pass INJECTED_SECRET from GitHub Secrets to test secret detection in binary
-        jf docker build -t $FULL_IMAGE:$IMAGE_TAG --build-arg INJECTED_SECRET=${{ secrets.FAKE_SECRET }} .
+      - name: Local Xray Docker Scan
+        run: |
+          IMAGE_TAG=${{ github.run_number }}
+          FULL_IMAGE="${{ vars.DOCKER_REPO }}/${{ env.IMAGE_NAME }}"
+          
+          jf docker scan $FULL_IMAGE:$IMAGE_TAG --watches="docker-security-watch" --fail=false
 
-    - name: Local Xray Docker Scan
-      run: |
-        IMAGE_TAG=${{ github.run_number }}
-        FULL_IMAGE="${{ vars.DOCKER_REPO }}/${{ env.IMAGE_NAME }}"
-        
-        echo "🛡️ Scanning Docker image locally..."
-        # Note: server-id is handled by the CLI 'use' command earlier
-        jf docker scan $FULL_IMAGE:$IMAGE_TAG --watches="docker-security-watch" --fail=false
+      - name: Push Docker Image
+        run: |
+          IMAGE_TAG=${{ github.run_number }}
+          FULL_IMAGE="${{ vars.DOCKER_REPO }}/${{ env.IMAGE_NAME }}"
+          
+          jf docker push $FULL_IMAGE:$IMAGE_TAG --build-name=${{ env.BUILD_NAME }} --build-number=${{ github.run_number }}
 
-    - name: Push Docker Image
-      run: |
-        IMAGE_TAG=${{ github.run_number }}
-        FULL_IMAGE="${{ vars.DOCKER_REPO }}/${{ env.IMAGE_NAME }}"
-        
-        echo "Pushing image: $FULL_IMAGE:$IMAGE_TAG"
-        jf docker push $FULL_IMAGE:$IMAGE_TAG --build-name=${{ env.BUILD_NAME }} --build-number=${{ github.run_number }}
-
-    - name: Publish Build Info
-      run: |
-        echo "Publishing build info..."
-        jf rt bp ${{ env.BUILD_NAME }} ${{ github.run_number }}
+      - name: Publish Build Info
+        run: |
+          jf rt bp ${{ env.BUILD_NAME }} ${{ github.run_number }}
